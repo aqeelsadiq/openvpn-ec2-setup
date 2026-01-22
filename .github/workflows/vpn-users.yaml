@@ -39,16 +39,17 @@ jobs:
       # 4️⃣ Create VPN users on all instances in ASG
       - name: Create VPN Users on EC2 ASG
         run: |
-          ASG_NAME="${{ secrets.OPENVPN_ASG_NAME }}"
-          echo "Targeting ASG: $ASG_NAME"
+            ASG_NAME="${{ secrets.OPENVPN_ASG_NAME }}"
+            echo "Targeting ASG: $ASG_NAME"
 
-          for USER in ${{ steps.users_list.outputs.users }}; do
+            for USER in ${{ steps.users_list.outputs.users }}; do
             echo "Creating VPN user: $USER"
 
             aws ssm send-command \
-              --targets "Key=tag:aws:autoscaling:groupName,Values=$ASG_NAME" \
-              --document-name "AWS-RunShellScript" \
-              --comment "Add VPN user $USER" \
-              --parameters 'commands=["sudo bash -c '\''/usr/local/bin/add-vpn-user.sh '"$USER"'\'"'"]' \
-              --region ${{ secrets.AWS_REGION }}
-          done
+                --targets "Key=tag:aws:autoscaling:groupName,Values=$ASG_NAME" \
+                --document-name "AWS-RunShellScript" \
+                --comment "Add VPN user $USER" \
+                --parameters commands=["sudo /usr/local/bin/add-vpn-user.sh $USER"] \
+                --region ${{ secrets.AWS_REGION }}
+            done
+
