@@ -1,0 +1,53 @@
+name: OpenVPN User Management
+
+on:
+  workflow_dispatch:
+    inputs:
+      users:
+        description: 'Comma-separated list of VPN usernames to create'
+        required: true
+        default: 'alice'
+
+jobs:
+  create-users:
+    name: Create VPN Users on ASG
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      #  Configure AWS CLI
+      - name: Configure AWS CLI
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      #  Prepare users list from input
+      - name: Prepare users list
+        id: users_list
+        run: |
+          echo "Input usernames: ${{ github.event.inputs.users }}"
+          IFS=',' read -ra USERS_ARRAY <<< "${{ github.event.inputs.users }}"
+          echo "Users array: ${USERS_ARRAY[@]}"
+          echo "users=${USERS_ARRAY[*]}" >> $GITHUB_OUTPUT
+
+      # Create VPN users on all instances in ASG
+      - name: Create VPN Users on EC2 ASG
+        run: |
+          ASG_NAME="${{ secrets.OPENVPN_ASG_NAME }}"
+          echo "Targeting ASG: $ASG_NAME"
+
+          for USER in ${{ steps.users_list.outputs.users }}; do
+            echo "Creating VPN user: $USER"
+            aws ssm send-command \
+              --targets "Key=tag:aws:autoscaling:groupName,Values=$ASG_NAME" \
+              --document-name "AWS-RunShellScript" \
+              --comment "Add VPN user $USER" \
+              --parameters 'commands=["sudo /usr/local/bin/add-vpn-user.sh '"$USER"'"]' \
+              --region ${{ secrets.AWS_REGION }}
+          done

@@ -1,0 +1,56 @@
+# =========================
+# Terraform
+# =========================
+
+# Terraform state files
+**/terraform.tfstate
+**/terraform.tfstate.*
+**/*.tfstate
+**/*.tfstate.backup
+
+# Terraform variables (may contain secrets)
+**/terraform.tfvars
+**/*.tfvars
+
+# Terraform working directory
+**/.terraform/
+**/.terraform.lock.hcl
+
+# Terraform crash logs
+crash.log
+crash.*.log
+
+# =========================
+# Sensitive override files
+# =========================
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# =========================
+# Lambda / Build artifacts
+# =========================
+
+# Zipped lambda packages
+**/*.zip
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# =========================
+# OS / Editor files
+# =========================
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# =========================
+# Logs
+# =========================
+*.log
