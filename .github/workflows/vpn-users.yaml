@@ -46,7 +46,7 @@ jobs:
             echo "Creating VPN user: $USER"
 
             aws ssm send-command \
-                --targets "Key=tag:aws:autoscaling:groupName,Values=$ASG_NAME" \
+                --targets "Key=tag:aws:autoscaling:groupName,Values=dev-demo-asg" \
                 --document-name "AWS-RunShellScript" \
                 --comment "Add VPN user $USER" \
                 --parameters commands=["sudo /usr/local/bin/add-vpn-user.sh $USER"] \
