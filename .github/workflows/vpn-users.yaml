@@ -1,22 +1,20 @@
-name: OpenVPN User Management
+name: OpenVPN User Management via SSH
 
 on:
   workflow_dispatch:
     inputs:
       users:
-        description: 'Comma-separated list of VPN usernames to create'
+        description: 'Comma-separated VPN usernames to create'
         required: true
         default: 'alice'
 
 jobs:
-  create-users:
-    name: Create VPN Users on ASG
+  create-vpn-users:
     runs-on: ubuntu-latest
 
     steps:
-
-      # 1️⃣ Checkout repo
-      - name: Checkout repository
+      # 1️⃣ Checkout repository (optional if scripts not needed)
+      - name: Checkout repo
         uses: actions/checkout@v3
 
       # 2️⃣ Configure AWS CLI
@@ -27,29 +25,45 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # 3️⃣ Prepare users list from input
-      - name: Prepare users list
-        id: users_list
+      # 3️⃣ Prepare user list
+      - name: Parse users input
+        id: parse_users
         run: |
-          echo "Input usernames: ${{ github.event.inputs.users }}"
-          IFS=',' read -ra USERS_ARRAY <<< "${{ github.event.inputs.users }}"
-          echo "Users array: ${USERS_ARRAY[@]}"
-          echo "users=${USERS_ARRAY[*]}" >> $GITHUB_OUTPUT
+          IFS=',' read -ra USERS <<< "${{ github.event.inputs.users }}"
+          echo "users=${USERS[*]}" >> $GITHUB_OUTPUT
 
-      # 4️⃣ Create VPN users on all instances in ASG
-      - name: Create VPN Users on EC2 ASG
+      # 4️⃣ Get EC2 instance public IPs from ASG
+      - name: Get EC2 public IPs from ASG
+        id: get_ips
         run: |
-            ASG_NAME="${{ secrets.OPENVPN_ASG_NAME }}"
-            echo "Targeting ASG: $ASG_NAME"
+          ASG_NAME="dev-demo-asg"  # <-- Replace with your ASG name or input
+          INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
+            --auto-scaling-group-names $ASG_NAME \
+            --query "AutoScalingGroups[0].Instances[].InstanceId" \
+            --output text)
+          echo "Instance IDs: $INSTANCE_IDS"
 
-            for USER in ${{ steps.users_list.outputs.users }}; do
-            echo "Creating VPN user: $USER"
+          PUBLIC_IPS=""
+          for ID in $INSTANCE_IDS; do
+            IP=$(aws ec2 describe-instances \
+              --instance-ids $ID \
+              --query "Reservations[0].Instances[0].PublicIpAddress" \
+              --output text)
+            PUBLIC_IPS="$PUBLIC_IPS $IP"
+          done
 
-            aws ssm send-command \
-                --targets "Key=tag:aws:autoscaling:groupName,Values=dev-demo-asg" \
-                --document-name "AWS-RunShellScript" \
-                --comment "Add VPN user $USER" \
-                --parameters commands=["sudo /usr/local/bin/add-vpn-user.sh $USER"] \
-                --region ${{ secrets.AWS_REGION }}
+          echo "ips=$PUBLIC_IPS" >> $GITHUB_OUTPUT
+          echo "Public IPs: $PUBLIC_IPS"
+
+      # 5️⃣ SSH into each instance and create VPN users
+      - name: Create VPN users via SSH
+        uses: appleboy/ssh-action@v0.1.8
+        with:
+          host: ${{ steps.get_ips.outputs.ips }}
+          username: ubuntu
+          key: ${{ secrets.OPENVPN_SSH_KEY }}
+          script: |
+            for USER in ${{ steps.parse_users.outputs.users }}; do
+              echo "Creating VPN user: $USER"
+              sudo /usr/local/bin/add-vpn-user.sh $USER
             done
-
