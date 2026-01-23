@@ -159,7 +159,7 @@ jobs:
         with:
           host: ${{ steps.get_ips.outputs.ips }}    # Or use a single static IP: ${{ secrets.VPN_EC2_IP }}
           username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY }}
+          key: ${{ secrets.OPENVPN_SSH_KEY }}
           script: |
             set -e
             echo "Starting OpenVPN user & group management"
