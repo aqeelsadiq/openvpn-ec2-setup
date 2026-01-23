@@ -127,11 +127,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout repo (optional)
+      # 1️⃣ Checkout repo
       - name: Checkout repo
         uses: actions/checkout@v3
 
-      # 2️⃣ Configure AWS CLI (optional, for ASG)
+      # 2️⃣ Configure AWS CLI (optional, if using ASG)
       - name: Configure AWS CLI
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -139,7 +139,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # 3️⃣ Get EC2 public IPs from ASG (or use a static IP)
+      # 3️⃣ Get EC2 public IPs (from ASG)
       - name: Get EC2 public IPs
         id: get_ips
         run: |
@@ -158,11 +158,10 @@ jobs:
             PUBLIC_IPS="$PUBLIC_IPS $IP"
           done
 
-          # Remove extra spaces and convert to newline-separated
           echo "ips=$(echo $PUBLIC_IPS | tr ' ' '\n')" >> $GITHUB_OUTPUT
           echo "Found EC2 IPs: $PUBLIC_IPS"
 
-      # 4️⃣ Manage OpenVPN via SSH
+      # 4️⃣ SSH into EC2 to manage OpenVPN
       - name: OpenVPN User & Group Management via SSH
         uses: appleboy/ssh-action@v0.1.8
         with:
@@ -171,17 +170,19 @@ jobs:
           key: ${{ secrets.OPENVPN_SSH_KEY }}
           script: |
             set -e
+
             ACTION="${{ github.event.inputs.action }}"
             USERS="${{ github.event.inputs.users }}"
             GROUPS="${{ github.event.inputs.groups }}"
 
             CERT_DIR="/etc/openvpn/easy-rsa/pki/issued"
             BASE_DIR="/etc/openvpn/groups"
+            EASYRSA_DIR="/etc/openvpn/easy-rsa"
 
             echo "Starting OpenVPN management action: $ACTION"
 
             # -----------------------
-            # Create Group
+            # CREATE GROUP
             # -----------------------
             if [ "$ACTION" == "create_group" ]; then
               for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
@@ -196,7 +197,7 @@ jobs:
             fi
 
             # -----------------------
-            # Delete Group
+            # DELETE GROUP
             # -----------------------
             if [ "$ACTION" == "delete_group" ]; then
               for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
@@ -210,18 +211,23 @@ jobs:
             fi
 
             # -----------------------
-            # Create User
+            # CREATE USER
             # -----------------------
             if [ "$ACTION" == "create_user" ]; then
               for USER in $(echo "$USERS" | tr ',' ' '); do
+                # 1️⃣ Generate certificate if not exist
                 if [ ! -f "$CERT_DIR/$USER.crt" ]; then
-                  echo "Certificate for user $USER not found. Skipping..."
-                  continue
+                  echo "Generating certificate for user $USER"
+                  cd $EASYRSA_DIR
+                  sudo ./easyrsa build-client-full "$USER" nopass
+                else
+                  echo "Certificate for user $USER already exists"
                 fi
 
+                # 2️⃣ Add user to specified groups
                 for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
                   if [ ! -d "$BASE_DIR/$GROUP" ]; then
-                    echo "Group $GROUP does not exist, creating..."
+                    echo "Group $GROUP does not exist. Creating..."
                     sudo mkdir -p "$BASE_DIR/$GROUP"
                     sudo chmod 750 "$BASE_DIR/$GROUP"
                   fi
@@ -234,7 +240,7 @@ jobs:
             fi
 
             # -----------------------
-            # Delete User
+            # DELETE USER
             # -----------------------
             if [ "$ACTION" == "delete_user" ]; then
               for USER in $(echo "$USERS" | tr ',' ' '); do
@@ -245,10 +251,20 @@ jobs:
                     sudo rm -f "$GROUP_DIR/$USER.crt"
                   fi
                 done
+
+                # Optionally revoke certificate
+                if [ -f "$CERT_DIR/$USER.crt" ]; then
+                  echo "Revoking certificate for $USER"
+                  cd $EASYRSA_DIR
+                  sudo ./easyrsa revoke "$USER"
+                  sudo ./easyrsa gen-crl
+                  sudo rm -f "$CERT_DIR/$USER.crt" "$CERT_DIR/$USER.key"
+                fi
               done
             fi
 
             echo "✅ OpenVPN management action completed: $ACTION"
+
 
 
 
