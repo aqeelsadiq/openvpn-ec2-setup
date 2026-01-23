@@ -105,30 +105,33 @@ on:
   workflow_dispatch:
     inputs:
       users:
-        description: "Comma-separated VPN usernames"
+        description: "Comma-separated VPN usernames (e.g., alice,bob)"
         required: true
-        default: "alice,bob"
+        default: "alice"
       groups:
-        description: "Comma-separated OpenVPN groups"
+        description: "Comma-separated OpenVPN groups (e.g., engineering,devops)"
         required: true
-        default: "engineering,devops"
+        default: "engineering"
 
 jobs:
   manage-vpn:
     runs-on: ubuntu-latest
 
     steps:
+      # 1️⃣ Checkout repo (optional)
       - name: Checkout repo
         uses: actions/checkout@v3
 
-      - name: Configure AWS CLI (optional, for ASG IPs)
+      # 2️⃣ Configure AWS CLI (optional, for ASG)
+      - name: Configure AWS CLI
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Get EC2 public IPs (if using ASG)
+      # 3️⃣ Get EC2 public IPs from ASG (optional, or use static IP)
+      - name: Get EC2 public IPs
         id: get_ips
         run: |
           ASG_NAME="dev-demo-asg"
@@ -146,24 +149,31 @@ jobs:
             PUBLIC_IPS="$PUBLIC_IPS $IP"
           done
 
+          # Remove extra spaces and convert to newline-separated
           echo "ips=$(echo $PUBLIC_IPS | tr ' ' '\n')" >> $GITHUB_OUTPUT
+          echo "Found EC2 IPs: $PUBLIC_IPS"
 
+      # 4️⃣ Manage OpenVPN users & groups over SSH
       - name: Manage OpenVPN users & groups via SSH
         uses: appleboy/ssh-action@v0.1.8
         with:
-          host: ${{ steps.get_ips.outputs.ips }}       # Or use static IP in secrets
+          host: ${{ steps.get_ips.outputs.ips }}    # Or use a single static IP: ${{ secrets.VPN_EC2_IP }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
+            set -e
+            echo "Starting OpenVPN user & group management"
+
             USERS="${{ github.event.inputs.users }}"
             GROUPS="${{ github.event.inputs.groups }}"
+
             CERT_DIR="/etc/openvpn/easy-rsa/pki/issued"
             BASE_DIR="/etc/openvpn/groups"
 
-            # Create groups if not exist
+            # 1️⃣ Create OpenVPN groups
             for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
               if [ ! -d "$BASE_DIR/$GROUP" ]; then
-                echo "Creating OpenVPN group: $GROUP"
+                echo "Creating OpenVPN group directory: $GROUP"
                 sudo mkdir -p "$BASE_DIR/$GROUP"
                 sudo chmod 750 "$BASE_DIR/$GROUP"
               else
@@ -171,13 +181,14 @@ jobs:
               fi
             done
 
-            # Add users to groups
+            # 2️⃣ Add users to groups
             for USER in $(echo "$USERS" | tr ',' ' '); do
+              if [ ! -f "$CERT_DIR/$USER.crt" ]; then
+                echo "Certificate for user $USER not found. Skipping..."
+                continue
+              fi
+
               for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
-                if [ ! -f "$CERT_DIR/$USER.crt" ]; then
-                  echo "Certificate not found for user $USER, skipping group $GROUP"
-                  continue
-                fi
                 echo "Adding user $USER to OpenVPN group $GROUP"
                 sudo cp "$CERT_DIR/$USER.crt" "$BASE_DIR/$GROUP/"
                 sudo chown root:root "$BASE_DIR/$GROUP/$USER.crt"
@@ -185,5 +196,6 @@ jobs:
               done
             done
 
-            echo "OpenVPN user(s) and group(s) setup completed."
+            echo "✅ OpenVPN users & groups management completed."
+
 
