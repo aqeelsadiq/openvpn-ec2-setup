@@ -104,32 +104,25 @@ name: OpenVPN User & Group Management
 on:
   workflow_dispatch:
     inputs:
-      action:
-        description: "Action to perform"
-        required: true
-        default: "create_user"
-        options:
-          - create_user
-          - delete_user
-          - create_group
-          - delete_group
       users:
-        description: "Comma-separated VPN usernames (required for create_user/delete_user)"
-        required: false
-        default: ""
+        description: "Comma-separated VPN usernames (e.g., alice,bob)"
+        required: true
+        default: "alice"
       groups:
-        description: "Comma-separated OpenVPN groups (required for create_group/delete_group or add user to group)"
-        required: false
-        default: ""
+        description: "Comma-separated OpenVPN groups (e.g., engineering,devops)"
+        required: true
+        default: "engineering"
 
 jobs:
   manage-vpn:
     runs-on: ubuntu-latest
 
     steps:
+      # 1️⃣ Checkout repo (optional)
       - name: Checkout repo
         uses: actions/checkout@v3
 
+      # 2️⃣ Configure AWS CLI (optional, if you want to fetch EC2 IPs dynamically)
       - name: Configure AWS CLI
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -137,6 +130,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+      # 3️⃣ Get EC2 public IPs from ASG (optional)
       - name: Get EC2 public IPs
         id: get_ips
         run: |
@@ -155,146 +149,64 @@ jobs:
             PUBLIC_IPS="$PUBLIC_IPS $IP"
           done
 
-          echo "ips=$(echo $PUBLIC_IPS | tr ' ' '\n')" >> $GITHUB_OUTPUT
+          # Convert to space-separated list
+          echo "ips=$(echo $PUBLIC_IPS | tr -s ' ')" >> $GITHUB_OUTPUT
           echo "Found EC2 IPs: $PUBLIC_IPS"
 
-      - name: OpenVPN User & Group Management via SSH
+      # 4️⃣ Manage OpenVPN users & groups via SSH
+      - name: Manage OpenVPN users & groups
         uses: appleboy/ssh-action@v0.1.8
         with:
-          host: ${{ steps.get_ips.outputs.ips }}
+          host: ${{ steps.get_ips.outputs.ips }}       # Or use static IP: ${{ secrets.VPN_EC2_IP }}
           username: ubuntu
           key: ${{ secrets.OPENVPN_SSH_KEY }}
           script: |
             set -e
+            echo "Starting OpenVPN user & group management"
 
-            ACTION="${{ github.event.inputs.action }}"
             USERS="${{ github.event.inputs.users }}"
             GROUPS="${{ github.event.inputs.groups }}"
 
-            EASYRSA_DIR="/etc/openvpn/easy-rsa"
             CLIENTS_DIR="/etc/openvpn/clients"
             GROUPS_DIR="/etc/openvpn/groups"
 
-            echo "Starting OpenVPN management action: $ACTION"
+            # 1️⃣ Create OpenVPN groups
+            for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
+              GROUP=$(echo "$GROUP" | xargs)  # trim whitespace
+              if [ -z "$GROUP" ]; then
+                echo "Skipping empty group"
+                continue
+              fi
 
-            # -----------------------
-            # CREATE GROUP
-            # -----------------------
-            if [ "$ACTION" == "create_group" ]; then
+              if [ ! -d "$GROUPS_DIR/$GROUP" ]; then
+                echo "Creating OpenVPN group directory: $GROUP"
+                sudo mkdir -p "$GROUPS_DIR/$GROUP"
+                sudo chmod 750 "$GROUPS_DIR/$GROUP"
+              else
+                echo "Group $GROUP already exists"
+              fi
+            done
+
+            # 2️⃣ Add users and copy certificates to groups
+            for USER in $(echo "$USERS" | tr ',' ' '); do
+              USER=$(echo "$USER" | xargs)  # trim whitespace
+
+              # Check if user certificate exists
+              if [ ! -f "$CLIENTS_DIR/$USER.crt" ]; then
+                echo "Certificate for user $USER not found. Skipping..."
+                continue
+              fi
+
+              # Copy certificate to each group
               for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
-                if [ ! -d "$GROUPS_DIR/$GROUP" ]; then
-                  echo "Creating OpenVPN group: $GROUP"
-                  sudo mkdir -p "$GROUPS_DIR/$GROUP"
-                  sudo chmod 750 "$GROUPS_DIR/$GROUP"
-                else
-                  echo "Group $GROUP already exists"
-                fi
+                GROUP=$(echo "$GROUP" | xargs)
+                echo "Adding user $USER to OpenVPN group $GROUP"
+                sudo cp "$CLIENTS_DIR/$USER.crt" "$GROUPS_DIR/$GROUP/"
+                sudo chown root:root "$GROUPS_DIR/$GROUP/$USER.crt"
+                sudo chmod 640 "$GROUPS_DIR/$GROUP/$USER.crt"
               done
-            fi
+            done
 
-            # -----------------------
-            # DELETE GROUP
-            # -----------------------
-            if [ "$ACTION" == "delete_group" ]; then
-              for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
-                if [ -d "$GROUPS_DIR/$GROUP" ]; then
-                  echo "Deleting OpenVPN group: $GROUP"
-                  sudo rm -rf "$GROUPS_DIR/$GROUP"
-                else
-                  echo "Group $GROUP does not exist"
-                fi
-              done
-            fi
-
-            # -----------------------
-            # CREATE USER (with .crt, .key, .ovpn)
-            # -----------------------
-            if [ "$ACTION" == "create_user" ]; then
-              for USER in $(echo "$USERS" | tr ',' ' '); do
-                cd $EASYRSA_DIR
-
-                # 1️⃣ Generate client certificate if missing
-                if [ ! -f "$CLIENTS_DIR/$USER.crt" ]; then
-                  echo "Generating OpenVPN client for $USER"
-                  sudo ./easyrsa build-client-full "$USER" nopass
-
-                  # Copy cert, key, and generate .ovpn
-                  sudo mkdir -p "$CLIENTS_DIR"
-                  sudo cp "pki/issued/$USER.crt" "$CLIENTS_DIR/"
-                  sudo cp "pki/private/$USER.key" "$CLIENTS_DIR/"
-                  sudo cp "pki/ca.crt" "$CLIENTS_DIR/"
-
-                  # Generate .ovpn file
-                  sudo bash -c "cat > $CLIENTS_DIR/$USER.ovpn <<EOF
-                  client
-                  dev tun
-                  proto udp
-                  remote YOUR_VPN_SERVER_IP 1194
-                  resolv-retry infinite
-                  nobind
-                  persist-key
-                  persist-tun
-                  remote-cert-tls server
-                  cipher AES-256-CBC
-                  auth SHA256
-                  key-direction 1
-                  <ca>
-                  $(cat $CLIENTS_DIR/ca.crt)
-                  </ca>
-                  <cert>
-                  $(cat $CLIENTS_DIR/$USER.crt)
-                  </cert>
-                  <key>
-                  $(cat $CLIENTS_DIR/$USER.key)
-                  </key>
-                  EOF"
-                  echo "✅ OpenVPN client $USER created at $CLIENTS_DIR/$USER.ovpn"
-                else
-                  echo "OpenVPN client $USER already exists"
-                fi
-
-                # 2️⃣ Add user to groups
-                for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
-                  if [ ! -d "$GROUPS_DIR/$GROUP" ]; then
-                    echo "Group $GROUP does not exist. Creating..."
-                    sudo mkdir -p "$GROUPS_DIR/$GROUP"
-                    sudo chmod 750 "$GROUPS_DIR/$GROUP"
-                  fi
-                  echo "Adding user $USER to OpenVPN group $GROUP"
-                  sudo cp "$CLIENTS_DIR/$USER.crt" "$GROUPS_DIR/$GROUP/"
-                  sudo chmod 640 "$GROUPS_DIR/$GROUP/$USER.crt"
-                done
-              done
-            fi
-
-            # -----------------------
-            # DELETE USER
-            # -----------------------
-            if [ "$ACTION" == "delete_user" ]; then
-              for USER in $(echo "$USERS" | tr ',' ' '); do
-                echo "Deleting OpenVPN client $USER"
-                sudo rm -f "$CLIENTS_DIR/$USER.crt" "$CLIENTS_DIR/$USER.key" "$CLIENTS_DIR/$USER.ovpn"
-
-                # Remove from groups
-                for GROUP_DIR in "$GROUPS_DIR"/*; do
-                  if [ -f "$GROUP_DIR/$USER.crt" ]; then
-                    echo "Removing $USER from $(basename $GROUP_DIR)"
-                    sudo rm -f "$GROUP_DIR/$USER.crt"
-                  fi
-                done
-
-                # Revoke certificate
-                cd $EASYRSA_DIR
-                if [ -f "pki/issued/$USER.crt" ]; then
-                  sudo ./easyrsa revoke "$USER"
-                  sudo ./easyrsa gen-crl
-                fi
-              done
-            fi
-
-            echo "✅ OpenVPN management action completed: $ACTION"
-
-
-
+            echo "✅ OpenVPN users & groups management completed."
 
 
