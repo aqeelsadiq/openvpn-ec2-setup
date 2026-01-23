@@ -104,14 +104,23 @@ name: OpenVPN User & Group Management
 on:
   workflow_dispatch:
     inputs:
+      action:
+        description: "Action to perform"
+        required: true
+        default: "create_user"
+        options:
+          - create_user
+          - delete_user
+          - create_group
+          - delete_group
       users:
-        description: "Comma-separated VPN usernames (e.g., alice,bob)"
-        required: true
-        default: "alice"
+        description: "Comma-separated VPN usernames (required for create_user/delete_user)"
+        required: false
+        default: ""
       groups:
-        description: "Comma-separated OpenVPN groups (e.g., engineering,devops)"
-        required: true
-        default: "engineering"
+        description: "Comma-separated OpenVPN groups (required for create_group/delete_group or add user to group)"
+        required: false
+        default: ""
 
 jobs:
   manage-vpn:
@@ -130,7 +139,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # 3️⃣ Get EC2 public IPs from ASG (optional, or use static IP)
+      # 3️⃣ Get EC2 public IPs from ASG (or use a static IP)
       - name: Get EC2 public IPs
         id: get_ips
         run: |
@@ -153,49 +162,93 @@ jobs:
           echo "ips=$(echo $PUBLIC_IPS | tr ' ' '\n')" >> $GITHUB_OUTPUT
           echo "Found EC2 IPs: $PUBLIC_IPS"
 
-      # 4️⃣ Manage OpenVPN users & groups over SSH
-      - name: Manage OpenVPN users & groups via SSH
+      # 4️⃣ Manage OpenVPN via SSH
+      - name: OpenVPN User & Group Management via SSH
         uses: appleboy/ssh-action@v0.1.8
         with:
-          host: ${{ steps.get_ips.outputs.ips }}    # Or use a single static IP: ${{ secrets.VPN_EC2_IP }}
+          host: ${{ steps.get_ips.outputs.ips }}
           username: ubuntu
           key: ${{ secrets.OPENVPN_SSH_KEY }}
           script: |
             set -e
-            echo "Starting OpenVPN user & group management"
-
+            ACTION="${{ github.event.inputs.action }}"
             USERS="${{ github.event.inputs.users }}"
             GROUPS="${{ github.event.inputs.groups }}"
 
             CERT_DIR="/etc/openvpn/easy-rsa/pki/issued"
             BASE_DIR="/etc/openvpn/groups"
 
-            # 1️⃣ Create OpenVPN groups
-            for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
-              if [ ! -d "$BASE_DIR/$GROUP" ]; then
-                echo "Creating OpenVPN group directory: $GROUP"
-                sudo mkdir -p "$BASE_DIR/$GROUP"
-                sudo chmod 750 "$BASE_DIR/$GROUP"
-              else
-                echo "Group $GROUP already exists"
-              fi
-            done
+            echo "Starting OpenVPN management action: $ACTION"
 
-            # 2️⃣ Add users to groups
-            for USER in $(echo "$USERS" | tr ',' ' '); do
-              if [ ! -f "$CERT_DIR/$USER.crt" ]; then
-                echo "Certificate for user $USER not found. Skipping..."
-                continue
-              fi
-
+            # -----------------------
+            # Create Group
+            # -----------------------
+            if [ "$ACTION" == "create_group" ]; then
               for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
-                echo "Adding user $USER to OpenVPN group $GROUP"
-                sudo cp "$CERT_DIR/$USER.crt" "$BASE_DIR/$GROUP/"
-                sudo chown root:root "$BASE_DIR/$GROUP/$USER.crt"
-                sudo chmod 640 "$BASE_DIR/$GROUP/$USER.crt"
+                if [ ! -d "$BASE_DIR/$GROUP" ]; then
+                  echo "Creating OpenVPN group: $GROUP"
+                  sudo mkdir -p "$BASE_DIR/$GROUP"
+                  sudo chmod 750 "$BASE_DIR/$GROUP"
+                else
+                  echo "Group $GROUP already exists"
+                fi
               done
-            done
+            fi
 
-            echo "✅ OpenVPN users & groups management completed."
+            # -----------------------
+            # Delete Group
+            # -----------------------
+            if [ "$ACTION" == "delete_group" ]; then
+              for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
+                if [ -d "$BASE_DIR/$GROUP" ]; then
+                  echo "Deleting OpenVPN group: $GROUP"
+                  sudo rm -rf "$BASE_DIR/$GROUP"
+                else
+                  echo "Group $GROUP does not exist"
+                fi
+              done
+            fi
+
+            # -----------------------
+            # Create User
+            # -----------------------
+            if [ "$ACTION" == "create_user" ]; then
+              for USER in $(echo "$USERS" | tr ',' ' '); do
+                if [ ! -f "$CERT_DIR/$USER.crt" ]; then
+                  echo "Certificate for user $USER not found. Skipping..."
+                  continue
+                fi
+
+                for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
+                  if [ ! -d "$BASE_DIR/$GROUP" ]; then
+                    echo "Group $GROUP does not exist, creating..."
+                    sudo mkdir -p "$BASE_DIR/$GROUP"
+                    sudo chmod 750 "$BASE_DIR/$GROUP"
+                  fi
+                  echo "Adding user $USER to OpenVPN group $GROUP"
+                  sudo cp "$CERT_DIR/$USER.crt" "$BASE_DIR/$GROUP/"
+                  sudo chown root:root "$BASE_DIR/$GROUP/$USER.crt"
+                  sudo chmod 640 "$BASE_DIR/$GROUP/$USER.crt"
+                done
+              done
+            fi
+
+            # -----------------------
+            # Delete User
+            # -----------------------
+            if [ "$ACTION" == "delete_user" ]; then
+              for USER in $(echo "$USERS" | tr ',' ' '); do
+                echo "Deleting user $USER from all OpenVPN groups"
+                for GROUP_DIR in "$BASE_DIR"/*; do
+                  if [ -f "$GROUP_DIR/$USER.crt" ]; then
+                    echo "Removing $USER from $(basename $GROUP_DIR)"
+                    sudo rm -f "$GROUP_DIR/$USER.crt"
+                  fi
+                done
+              done
+            fi
+
+            echo "✅ OpenVPN management action completed: $ACTION"
+
 
 
