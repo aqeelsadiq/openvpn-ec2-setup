@@ -17,11 +17,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout repo
       - name: Checkout repo
         uses: actions/checkout@v3
 
-      # 2️⃣ Configure AWS CLI
       - name: Configure AWS CLI
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -29,21 +27,19 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # 3️⃣ Parse users
       - name: Parse users
         id: parse_users
         run: |
-          IFS=',' read -ra USERS <<< "${{ github.event.inputs.users }}"
-          echo "users=${USERS[*]}" >> $GITHUB_OUTPUT
+          echo "users=${{ github.event.inputs.users }}" >> "$GITHUB_OUTPUT"
+        
+        
 
-      # 4️⃣ Parse groups
       - name: Parse groups
         id: parse_groups
         run: |
-          IFS=',' read -ra GROUPS <<< "${{ github.event.inputs.groups }}"
-          echo "groups=${GROUPS[*]}" >> $GITHUB_OUTPUT
+          echo "groups=${{ github.event.inputs.groups }}" >> "$GITHUB_OUTPUT"
+        
 
-      # 5️⃣ Get EC2 Public IPs from ASG
       - name: Get EC2 public IPs
         id: get_ips
         run: |
@@ -65,7 +61,6 @@ jobs:
 
           echo "ips=$PUBLIC_IPS" >> $GITHUB_OUTPUT
 
-      # 6️⃣ Create groups, users & assign groups via SSH
       - name: Manage users & groups
         uses: appleboy/ssh-action@v0.1.8
         with:
