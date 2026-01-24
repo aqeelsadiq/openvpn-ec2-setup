@@ -84,7 +84,7 @@ module "ASG" {
 module "openvpn_s3" {
   source = "../../modules/s3"
 
-  bucket_name        = "${var.env}-openvpn-bucket-aq"
+  bucket_name        = "${var.env}-${var.identifier}-openvpn-bucket"
   env                = var.env
   acl                = "private"
   versioning_enabled = true
