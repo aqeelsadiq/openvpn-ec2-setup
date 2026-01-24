@@ -74,10 +74,6 @@ variable "min_size" {
   type        = number
 }
 
-variable "ec2_snapshot_name" {
-  description = "Name of the EC2 snapshot used for instance recovery or AMI creation."
-  type        = string
-}
 
 variable "scale_in_policy_name" {
   description = "Name of the Auto Scaling scale-in policy."

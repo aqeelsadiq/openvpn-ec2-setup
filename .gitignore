@@ -9,8 +9,8 @@
 **/*.tfstate.backup
 
 # Terraform variables (may contain secrets)
-**/terraform.tfvars
-**/*.tfvars
+# **/terraform.tfvars
+# **/*.tfvars
 
 # Terraform working directory
 **/.terraform/

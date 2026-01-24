@@ -60,33 +60,7 @@ variable "ASG" {
     scale_out_policy_name  = string
     adjustment_type        = string
     policy_type            = string
-    launch_template_name   = string
-    open_vpn_ami           = string
     ubuntu_latest_ami      = string
-    ec2_snapshot_name      = string
     loop                   = string
   }))
 }
-
-# variable "ALB" {
-#   description = "ALB configuration"
-#   type = list(object({
-#     alb_name                         = string
-#     load_balancer_type               = string
-#     target_group_name                = string
-#     alb_listener_port                = number
-#     target_group_protocol            = string
-#     alb_listener_type                = string
-#     loop                             = string
-#     alb_egress_protocol              = string
-#     enable_deletion_protection       = bool
-#     internal                         = bool
-#     health_check_path                = string
-#     health_check_protocol            = string
-#     health_check_healthy_threshold   = number
-#     health_check_unhealthy_threshold = number
-#     health_check_timeout             = number
-#     health_check_interval            = number
-#     health_check_matcher             = string
-#   }))
-# }
