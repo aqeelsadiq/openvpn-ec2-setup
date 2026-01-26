@@ -164,7 +164,7 @@ EOF
 
 # Backup everything to S3
 tar -czf /tmp/users.tar.gz /etc/openvpn/clients /etc/openvpn/easy-rsa /etc/openvpn/ta.key /etc/openvpn/ca.crt /etc/openvpn/server.crt /etc/openvpn/server.key /etc/openvpn/dh.pem
-aws s3 cp /tmp/users.tar.gz s3://dev-openvpn-bucket-aq/users.tar.gz
+aws s3 cp /tmp/users.tar.gz s3://dev-rhizome-openvpn-bucket/users.tar.gz
 
 echo "Client config created: /etc/openvpn/clients/$client_name.ovpn"
 EOM
