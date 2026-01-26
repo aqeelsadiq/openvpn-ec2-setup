@@ -148,9 +148,13 @@ Client config location:
 Supported actions:
 
 create-users
+
 create-groups
+
 create-users-and-groups
+
 assign-users-to-groups
+
 list-groups
 
 ---
