@@ -1,73 +1,70 @@
-### OpenVPN Terraform & GitHub Actions Setup
+# OpenVPN Terraform & GitHub Actions Setup
 
-```text
-Production-ready OpenVPN on AWS using Terraform + Auto Scaling + GitHub Actions
-```
+**Production-ready OpenVPN on AWS using Terraform, Auto Scaling, and GitHub Actions**
 
 ---
 
+## Prerequisites
+
+Before using this project, ensure the following requirements are met:
+
+- AWS account
+- Terraform **>= 1.x** installed locally
+- AWS CLI configured locally
+- An existing EC2 key pair
+- A GitHub repository with Actions enabled
+- SSH access to the OpenVPN EC2 instances
+
+### AWS Requirements
+
+- IAM user or role with permissions for **EC2, Auto Scaling, and S3**
+- An S3 bucket for OpenVPN backups
+- An available Elastic IP in the target region
+
 ---
 
-### What This Project Does
+## What This Project Does
 
-```text
-✔ Deploys OpenVPN using Terraform
-✔ Runs OpenVPN inside an Auto Scaling Group
-✔ Restores VPN state from S3 on every boot
-✔ Manages users & groups via GitHub Actions
-✔ Zero manual recovery required
-```
+- Deploys an OpenVPN server on AWS EC2 using Terraform
+- Runs OpenVPN inside EC2 instances created via a **Launch Template and Auto Scaling Group**
+- Restores VPN state from S3 if an EC2 instance is terminated and a new instance is created
+- Manages VPN users and groups via GitHub Actions
+- Requires zero manual recovery
 
 ---
 
-###  Terraform Responsibilities
+## Terraform Responsibilities
 
-```text
-- VPC, subnets, routing
-- Security groups
-- S3 bucket for backups
-- Auto Scaling Group
-- EC2 instances with user-data
-```
+- Create VPC, subnets, and routing
+- Configure security groups
+- Create an S3 bucket for backups
+- Create an Auto Scaling Group
+- Launch EC2 instances with user-data
 
-User-data script used:
+**User-data script used:**
 
 ```text
 modules/autoscaling/script.sh
-```
 
 ---
 
-### EC2 User-Data (script.sh)
+### What EC2 User-Data Does (script.sh)
 
-```text
 - Install OpenVPN + Easy-RSA
 - Auto-attach Elastic IP
 - Restore PKI/users from S3 if exists
 - Generate PKI on first boot
 - Enable CCD + group subnets
 - Upload backup after every change
-```
 
 Backup file:
 
 ```text
 s3://<bucket-name>/users.tar.gz
 ```
+You can Download the File from S3 and Extract it to get the users .ovpn file and groups.
 
 ---
-
-### OpenVPN Configuration
-
-```text
-Protocol: UDP
-Port: 1194
-Cipher: AES-256-CBC
-Auth: SHA256
-TLS Auth: enabled
-Client-to-client: enabled
-Group-based subnets: enabled
-```
 
 ---
 
@@ -84,7 +81,7 @@ Group-based subnets: enabled
 
 ---
 
-###  OpenVPN Management Scripts
+###  OpenVPN Management Scripts Run Manually on EC2 Instance
 
 ```text
 /usr/local/bin/add-vpn-user.sh
@@ -93,37 +90,13 @@ Group-based subnets: enabled
 /usr/local/bin/list-vpn-groups.sh
 ```
 
-Examples:
+Examples: 
+**How to Run script manually?**
 
 ```bash
-sudo add-vpn-group.sh engineering
-sudo add-vpn-user.sh alice engineering
+sudo add-vpn-group.sh <group-name>
+sudo add-vpn-user.sh <usernme> <group-name>
 sudo list-vpn-groups.sh
-```
-
----
-
-### Prerequisites
-
-```text
-Before using this project, ensure the following are in place:
-```
-
-```text
-✔ AWS account
-✔ Terraform >= 1.x installed locally
-✔ AWS CLI configured locally
-✔ An existing EC2 key pair
-✔ GitHub repository with Actions enabled
-✔ SSH access to OpenVPN EC2 instances
-```
-
-AWS requirements:
-
-```text
-- IAM user/role with EC2, ASG, S3 permissions
-- S3 bucket for OpenVPN backups
-- Elastic IP available in target region
 ```
 
 ---
@@ -174,21 +147,19 @@ Client config location:
 
 Supported actions:
 
-```text
 create-users
 create-groups
 create-users-and-groups
 assign-users-to-groups
 list-groups
-```
 
 ---
 
 ### Workflow Inputs
 
 ```text
-users: alice,bob,charlie
-groups: engineering,sales,admin
+users: alice
+groups: engineering
 users_with_groups: alice:engineering,bob:sales
 user_group_mapping: charlie:admin
 ```
@@ -208,13 +179,11 @@ OPENVPN_SSH_KEY
 
 ###  Auto Scaling Behavior
 
-```text
 1. ASG launches instance
 2. user-data runs
 3. Restore VPN state from S3
 4. Start OpenVPN
 5. GitHub Actions connects to all instances
-```
 
 ---
 
@@ -232,9 +201,31 @@ Client config path:
 
 ---
 
+### How to Run Code from Start?
+
+1- Clone the repo
+2- Navigate to the dev environment:
+```text
+cd repo-name/envs/dev
+```
+3- Run the following terraform commands:
+Terraform init
+Terraform plan
+Terraform apply --auto-approve
+
+4- After the infrastructure is created, SSH into the EC2 instance and create users and groups using the commands described above.
+
+5- Download the backup file from S3 and extract it.
+6- Navigate to the extracted location and connect to the VPN:
+```text
+sudo openvpn --config alice.ovpn
+```
+
+
 ###  Notes
 
-```text
-If the ASG dies, users survive.
-This setup is built for real production use.
-```
+If you make changes, ensure you also update the following:
+
+S3 bucket name in script.sh
+
+Auto Scaling Group name in the GitHub Actions workflow file
