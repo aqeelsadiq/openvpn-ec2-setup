@@ -142,7 +142,7 @@ Client config location:
 ### GitHub Actions Workflow
 
 ```text
-.github/workflows/users-group.yml
+.github/workflows/manage-users-groups.yaml
 ```
 
 Supported actions:
