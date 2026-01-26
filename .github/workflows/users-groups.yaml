@@ -1,354 +1,292 @@
-name: OpenVPN User Management via SSH
+name: OpenVPN User and Group Management via SSH
 
 on:
   workflow_dispatch:
     inputs:
-      ACTION:
-        description: "Action to perform"
+      action:
+        description: 'Action to perform'
+        required: true
         type: choice
-        required: true
         options:
-          - create
-          - delete
-
-      USERS:
-        description: "Comma-separated VPN usernames"
-        required: true
-        default: "alice"
-
-      GROUPS:
-        description: "Comma-separated OpenVPN groups (infra,dev,prod)"
+          - create-users
+          - create-groups
+          - create-users-and-groups
+          - assign-users-to-groups
+          - list-groups
+        default: 'create-users'
+      users:
+        description: 'Comma-separated VPN usernames to create (e.g., alice,bob,charlie)'
         required: false
-        default: "dev"
-
-env:
-  ASG_NAME: dev-rhizome-asg
-  SSH_USER: ubuntu
+        default: ''
+      groups:
+        description: 'Comma-separated VPN group names to create (e.g., engineering,sales,admin)'
+        required: false
+        default: ''
+      user_group_mapping:
+        description: 'User-to-group mapping (format: user1:group1,user2:group2,user3:group1)'
+        required: false
+        default: ''
+      users_with_groups:
+        description: 'Create users directly in groups (format: user1:group1,user2:group2)'
+        required: false
+        default: ''
 
 jobs:
-  manage-openvpn-users:
+  manage-vpn:
     runs-on: ubuntu-latest
 
     steps:
-    # -------------------------------
-    # Checkout (standard practice)
-    # -------------------------------
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      # 1️⃣ Checkout repository
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
-    # -------------------------------
-    # Configure AWS CLI
-    # -------------------------------
-    - name: Configure AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v5
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ secrets.AWS_REGION }}
+      # 2️⃣ Configure AWS CLI
+      - name: Configure AWS CLI
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-    # -------------------------------
-    # Discover OpenVPN EC2 instances
-    # -------------------------------
-    - name: Get OpenVPN EC2 Public IPs
-      id: get_ips
-      run: |
-        set -e
+      # 3️⃣ Validate inputs based on action
+      - name: Validate inputs
+        id: validate
+        run: |
+          ACTION="${{ github.event.inputs.action }}"
+          USERS="${{ github.event.inputs.users }}"
+          GROUPS="${{ github.event.inputs.groups }}"
+          MAPPING="${{ github.event.inputs.user_group_mapping }}"
+          USERS_WITH_GROUPS="${{ github.event.inputs.users_with_groups }}"
 
-        INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
-          --auto-scaling-group-names "${ASG_NAME}" \
-          --query "AutoScalingGroups[0].Instances[].InstanceId" \
-          --output text)
+          echo "action=$ACTION" >> $GITHUB_OUTPUT
 
-        if [[ -z "$INSTANCE_IDS" ]]; then
-          echo "No EC2 instances found in ASG"
-          exit 1
-        fi
+          case $ACTION in
+            create-users)
+              if [ -z "$USERS" ]; then
+                echo "::error::Users input is required for create-users action"
+                exit 1
+              fi
+              ;;
+            create-groups)
+              if [ -z "$GROUPS" ]; then
+                echo "::error::Groups input is required for create-groups action"
+                exit 1
+              fi
+              ;;
+            create-users-and-groups)
+              if [ -z "$USERS" ] && [ -z "$GROUPS" ] && [ -z "$USERS_WITH_GROUPS" ]; then
+                echo "::error::At least one of users, groups, or users_with_groups is required"
+                exit 1
+              fi
+              ;;
+            assign-users-to-groups)
+              if [ -z "$MAPPING" ]; then
+                echo "::error::user_group_mapping is required for assign-users-to-groups action"
+                exit 1
+              fi
+              ;;
+            list-groups)
+              # No validation needed
+              ;;
+          esac
 
-        IPS=""
-        for ID in $INSTANCE_IDS; do
-          IP=$(aws ec2 describe-instances \
-            --instance-ids "$ID" \
-            --query "Reservations[0].Instances[0].PublicIpAddress" \
+      # 4️⃣ Parse inputs
+      - name: Parse inputs
+        id: parse_inputs
+        run: |
+          # Parse users
+          if [ -n "${{ github.event.inputs.users }}" ]; then
+            IFS=',' read -ra USERS <<< "${{ github.event.inputs.users }}"
+            echo "users=${USERS[*]}" >> $GITHUB_OUTPUT
+            echo "has_users=true" >> $GITHUB_OUTPUT
+          else
+            echo "users=" >> $GITHUB_OUTPUT
+            echo "has_users=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Parse groups
+          if [ -n "${{ github.event.inputs.groups }}" ]; then
+            IFS=',' read -ra GROUPS <<< "${{ github.event.inputs.groups }}"
+            echo "groups=${GROUPS[*]}" >> $GITHUB_OUTPUT
+            echo "has_groups=true" >> $GITHUB_OUTPUT
+          else
+            echo "groups=" >> $GITHUB_OUTPUT
+            echo "has_groups=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Parse user-group mapping
+          if [ -n "${{ github.event.inputs.user_group_mapping }}" ]; then
+            echo "user_group_mapping=${{ github.event.inputs.user_group_mapping }}" >> $GITHUB_OUTPUT
+            echo "has_mapping=true" >> $GITHUB_OUTPUT
+          else
+            echo "user_group_mapping=" >> $GITHUB_OUTPUT
+            echo "has_mapping=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Parse users with groups
+          if [ -n "${{ github.event.inputs.users_with_groups }}" ]; then
+            echo "users_with_groups=${{ github.event.inputs.users_with_groups }}" >> $GITHUB_OUTPUT
+            echo "has_users_with_groups=true" >> $GITHUB_OUTPUT
+          else
+            echo "users_with_groups=" >> $GITHUB_OUTPUT
+            echo "has_users_with_groups=false" >> $GITHUB_OUTPUT
+          fi
+
+      # 5️⃣ Get EC2 instance public IPs from ASG
+      - name: Get EC2 public IPs from ASG
+        id: get_ips
+        run: |
+          ASG_NAME="dev-rhizome-asg"  
+          INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
+            --auto-scaling-group-names $ASG_NAME \
+            --query "AutoScalingGroups[0].Instances[?LifecycleState=='InService'].InstanceId" \
             --output text)
+          
+          if [ -z "$INSTANCE_IDS" ]; then
+            echo "::error::No running instances found in ASG: $ASG_NAME"
+            exit 1
+          fi
+          
+          echo "Instance IDs: $INSTANCE_IDS"
 
-          [[ "$IP" != "None" ]] && IPS="$IPS $IP"
-        done
+          PUBLIC_IPS=""
+          for ID in $INSTANCE_IDS; do
+            IP=$(aws ec2 describe-instances \
+              --instance-ids $ID \
+              --query "Reservations[0].Instances[0].PublicIpAddress" \
+              --output text)
+            PUBLIC_IPS="$PUBLIC_IPS $IP"
+          done
 
-        if [[ -z "$IPS" ]]; then
-          echo "No public IPs found"
-          exit 1
-        fi
+          echo "ips=$PUBLIC_IPS" >> $GITHUB_OUTPUT
+          echo "Public IPs: $PUBLIC_IPS"
 
-        echo "ips=$IPS" >> $GITHUB_OUTPUT
-        echo "OpenVPN servers: $IPS"
-
-    # -------------------------------
-    # CREATE OpenVPN users
-    # -------------------------------
-    - name: Create OpenVPN users
-      if: inputs.ACTION == 'create'
-      uses: appleboy/ssh-action@v0.1.8
-      with:
-        host: ${{ steps.get_ips.outputs.ips }}
-        username: ${{ env.SSH_USER }}
-        key: ${{ secrets.OPENVPN_SSH_KEY }}
-        script: |
-          set -e
-
-          IFS=',' read -ra USERS <<< "${{ inputs.USERS }}"
-          IFS=',' read -ra GROUPS <<< "${{ inputs.GROUPS }}"
-
-          sudo mkdir -p /etc/openvpn/ccd
-
-          for USER in "${USERS[@]}"; do
-            echo "Creating OpenVPN user: $USER"
-
-            sudo /usr/local/bin/add-vpn-user.sh "$USER"
-
-            CCD_FILE="/etc/openvpn/ccd/$USER"
-            sudo rm -f "$CCD_FILE"
-
-            for GROUP in "${GROUPS[@]}"; do
-              echo "Assigning $USER to group: $GROUP"
-
-              case "$GROUP" in
-                infra)
-                  echo 'push "route 10.0.0.0 255.255.0.0"' | sudo tee -a "$CCD_FILE"
-                  ;;
-                dev)
-                  echo 'push "route 10.1.0.0 255.255.0.0"' | sudo tee -a "$CCD_FILE"
-                  ;;
-                prod)
-                  echo 'push "route 10.2.0.0 255.255.0.0"' | sudo tee -a "$CCD_FILE"
-                  ;;
-                *)
-                  echo "Unknown group: $GROUP (skipped)"
-                  ;;
-              esac
+      # 6️⃣ Create VPN groups
+      - name: Create VPN groups
+        if: |
+          (steps.validate.outputs.action == 'create-groups' || 
+           steps.validate.outputs.action == 'create-users-and-groups') &&
+          steps.parse_inputs.outputs.has_groups == 'true'
+        uses: appleboy/ssh-action@v0.1.8
+        with:
+          host: ${{ steps.get_ips.outputs.ips }}
+          username: ubuntu
+          key: ${{ secrets.OPENVPN_SSH_KEY }}
+          script: |
+            echo "=== Creating VPN Groups ==="
+            for GROUP in ${{ steps.parse_inputs.outputs.groups }}; do
+              echo "Creating VPN group: $GROUP"
+              sudo /usr/local/bin/add-vpn-group.sh "$GROUP"
             done
-          done
+            echo "=== Groups Created Successfully ==="
 
-          sudo systemctl restart openvpn@server
+      # 7️⃣ Create VPN users (without groups)
+      - name: Create VPN users
+        if: |
+          (steps.validate.outputs.action == 'create-users' || 
+           steps.validate.outputs.action == 'create-users-and-groups') &&
+          steps.parse_inputs.outputs.has_users == 'true'
+        uses: appleboy/ssh-action@v0.1.8
+        with:
+          host: ${{ steps.get_ips.outputs.ips }}
+          username: ubuntu
+          key: ${{ secrets.OPENVPN_SSH_KEY }}
+          script: |
+            echo "=== Creating VPN Users ==="
+            for USER in ${{ steps.parse_inputs.outputs.users }}; do
+              echo "Creating VPN user: $USER"
+              sudo /usr/local/bin/add-vpn-user.sh "$USER"
+            done
+            echo "=== Users Created Successfully ==="
 
-    # -------------------------------
-    # DELETE / REVOKE OpenVPN users
-    # -------------------------------
-    - name: Delete OpenVPN users
-      if: inputs.ACTION == 'delete'
-      uses: appleboy/ssh-action@v0.1.8
-      with:
-        host: ${{ steps.get_ips.outputs.ips }}
-        username: ${{ env.SSH_USER }}
-        key: ${{ secrets.OPENVPN_SSH_KEY }}
-        script: |
-          set -e
+      # 8️⃣ Create users with groups directly
+      - name: Create users with groups
+        if: |
+          steps.validate.outputs.action == 'create-users-and-groups' &&
+          steps.parse_inputs.outputs.has_users_with_groups == 'true'
+        uses: appleboy/ssh-action@v0.1.8
+        with:
+          host: ${{ steps.get_ips.outputs.ips }}
+          username: ubuntu
+          key: ${{ secrets.OPENVPN_SSH_KEY }}
+          script: |
+            echo "=== Creating Users with Group Assignment ==="
+            MAPPING="${{ steps.parse_inputs.outputs.users_with_groups }}"
+            IFS=',' read -ra PAIRS <<< "$MAPPING"
+            for PAIR in "${PAIRS[@]}"; do
+              IFS=':' read -ra ITEM <<< "$PAIR"
+              USER="${ITEM[0]}"
+              GROUP="${ITEM[1]}"
+              echo "Creating user $USER in group $GROUP"
+              sudo /usr/local/bin/add-vpn-user.sh "$USER" "$GROUP"
+            done
+            echo "=== Users Created and Assigned Successfully ==="
 
-          IFS=',' read -ra USERS <<< "${{ inputs.USERS }}"
-          cd /etc/openvpn/easy-rsa
+      # 9️⃣ Assign existing users to groups
+      - name: Assign users to groups
+        if: |
+          (steps.validate.outputs.action == 'assign-users-to-groups' ||
+           steps.validate.outputs.action == 'create-users-and-groups') &&
+          steps.parse_inputs.outputs.has_mapping == 'true'
+        uses: appleboy/ssh-action@v0.1.8
+        with:
+          host: ${{ steps.get_ips.outputs.ips }}
+          username: ubuntu
+          key: ${{ secrets.OPENVPN_SSH_KEY }}
+          script: |
+            echo "=== Assigning Users to Groups ==="
+            MAPPING="${{ steps.parse_inputs.outputs.user_group_mapping }}"
+            IFS=',' read -ra PAIRS <<< "$MAPPING"
+            for PAIR in "${PAIRS[@]}"; do
+              IFS=':' read -ra ITEM <<< "$PAIR"
+              USER="${ITEM[0]}"
+              GROUP="${ITEM[1]}"
+              echo "Assigning user $USER to group $GROUP"
+              sudo /usr/local/bin/assign-user-to-group.sh "$USER" "$GROUP"
+            done
+            echo "=== Users Assigned Successfully ==="
 
-          for USER in "${USERS[@]}"; do
-            echo "Revoking OpenVPN user: $USER"
+      # 🔟 List all groups
+      - name: List VPN groups
+        if: steps.validate.outputs.action == 'list-groups'
+        uses: appleboy/ssh-action@v0.1.8
+        with:
+          host: ${{ steps.get_ips.outputs.ips }}
+          username: ubuntu
+          key: ${{ secrets.OPENVPN_SSH_KEY }}
+          script: |
+            echo "=== Listing All VPN Groups ==="
+            sudo /usr/local/bin/list-vpn-groups.sh
+            echo ""
+            echo "=== All VPN Users ==="
+            ls -1 /etc/openvpn/clients/*.ovpn 2>/dev/null | xargs -n1 basename | sed 's/.ovpn$//' || echo "No users found"
 
-            sudo ./easyrsa revoke "$USER"
-            sudo ./easyrsa gen-crl
-
-            sudo rm -f /etc/openvpn/clients/$USER.*
-            sudo rm -f /etc/openvpn/ccd/$USER
-          done
-
-          sudo systemctl restart openvpn@server
-
-
-# on:
-#   workflow_dispatch:
-#     inputs:
-#       action:
-#         description: "Action to perform"
-#         required: true
-#         default: "create_user"
-#         options:
-#           - create_user
-#           - delete_user
-#           - create_group
-#           - delete_group
-#       users:
-#         description: "Comma-separated VPN usernames (required for create_user/delete_user)"
-#         required: false
-#         default: ""
-#       groups:
-#         description: "Comma-separated OpenVPN groups (required for create_group/delete_group or add user to group)"
-#         required: false
-#         default: ""
-
-# jobs:
-#   manage-vpn:
-#     runs-on: ubuntu-latest
-
-#     steps:
-#       - name: Checkout repo
-#         uses: actions/checkout@v3
-
-#       - name: Configure AWS CLI
-#         uses: aws-actions/configure-aws-credentials@v2
-#         with:
-#           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-#           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-#           aws-region: ${{ secrets.AWS_REGION }}
-
-#       - name: Get EC2 public IPs
-#         id: get_ips
-#         run: |
-#           ASG_NAME="dev-demo-asg"
-#           INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
-#             --auto-scaling-group-names $ASG_NAME \
-#             --query "AutoScalingGroups[0].Instances[].InstanceId" \
-#             --output text)
-
-#           PUBLIC_IPS=""
-#           for ID in $INSTANCE_IDS; do
-#             IP=$(aws ec2 describe-instances \
-#               --instance-ids $ID \
-#               --query "Reservations[0].Instances[0].PublicIpAddress" \
-#               --output text)
-#             PUBLIC_IPS="$PUBLIC_IPS $IP"
-#           done
-
-#           echo "ips=$(echo $PUBLIC_IPS | tr ' ' '\n')" >> $GITHUB_OUTPUT
-#           echo "Found EC2 IPs: $PUBLIC_IPS"
-
-#       - name: OpenVPN User & Group Management via SSH
-#         uses: appleboy/ssh-action@v0.1.8
-#         with:
-#           host: ${{ steps.get_ips.outputs.ips }}
-#           username: ubuntu
-#           key: ${{ secrets.OPENVPN_SSH_KEY }}
-#           script: |
-#             set -e
-
-#             ACTION="${{ github.event.inputs.action }}"
-#             USERS="${{ github.event.inputs.users }}"
-#             GROUPS="${{ github.event.inputs.groups }}"
-
-#             EASYRSA_DIR="/etc/openvpn/easy-rsa"
-#             CLIENTS_DIR="/etc/openvpn/clients"
-#             GROUPS_DIR="/etc/openvpn/groups"
-
-#             echo "Starting OpenVPN management action: $ACTION"
-
-#             # -----------------------
-#             # CREATE GROUP
-#             # -----------------------
-#             if [ "$ACTION" == "create_group" ]; then
-#               for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
-#                 if [ ! -d "$GROUPS_DIR/$GROUP" ]; then
-#                   echo "Creating OpenVPN group: $GROUP"
-#                   sudo mkdir -p "$GROUPS_DIR/$GROUP"
-#                   sudo chmod 750 "$GROUPS_DIR/$GROUP"
-#                 else
-#                   echo "Group $GROUP already exists"
-#                 fi
-#               done
-#             fi
-
-#             # -----------------------
-#             # DELETE GROUP
-#             # -----------------------
-#             if [ "$ACTION" == "delete_group" ]; then
-#               for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
-#                 if [ -d "$GROUPS_DIR/$GROUP" ]; then
-#                   echo "Deleting OpenVPN group: $GROUP"
-#                   sudo rm -rf "$GROUPS_DIR/$GROUP"
-#                 else
-#                   echo "Group $GROUP does not exist"
-#                 fi
-#               done
-#             fi
-
-#             # -----------------------
-#             # CREATE USER (with .crt, .key, .ovpn)
-#             # -----------------------
-#             if [ "$ACTION" == "create_user" ]; then
-#               for USER in $(echo "$USERS" | tr ',' ' '); do
-#                 cd $EASYRSA_DIR
-
-#                 # 1️⃣ Generate client certificate if missing
-#                 if [ ! -f "$CLIENTS_DIR/$USER.crt" ]; then
-#                   echo "Generating OpenVPN client for $USER"
-#                   sudo ./easyrsa build-client-full "$USER" nopass
-
-#                   # Copy cert, key, and generate .ovpn
-#                   sudo mkdir -p "$CLIENTS_DIR"
-#                   sudo cp "pki/issued/$USER.crt" "$CLIENTS_DIR/"
-#                   sudo cp "pki/private/$USER.key" "$CLIENTS_DIR/"
-#                   sudo cp "pki/ca.crt" "$CLIENTS_DIR/"
-
-#                   # Generate .ovpn file
-#                   sudo bash -c "cat > $CLIENTS_DIR/$USER.ovpn <<EOF
-#                   client
-#                   dev tun
-#                   proto udp
-#                   remote YOUR_VPN_SERVER_IP 1194
-#                   resolv-retry infinite
-#                   nobind
-#                   persist-key
-#                   persist-tun
-#                   remote-cert-tls server
-#                   cipher AES-256-CBC
-#                   auth SHA256
-#                   key-direction 1
-#                   <ca>
-#                   $(cat $CLIENTS_DIR/ca.crt)
-#                   </ca>
-#                   <cert>
-#                   $(cat $CLIENTS_DIR/$USER.crt)
-#                   </cert>
-#                   <key>
-#                   $(cat $CLIENTS_DIR/$USER.key)
-#                   </key>
-#                   EOF"
-#                   echo "✅ OpenVPN client $USER created at $CLIENTS_DIR/$USER.ovpn"
-#                 else
-#                   echo "OpenVPN client $USER already exists"
-#                 fi
-
-#                 # 2️⃣ Add user to groups
-#                 for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
-#                   if [ ! -d "$GROUPS_DIR/$GROUP" ]; then
-#                     echo "Group $GROUP does not exist. Creating..."
-#                     sudo mkdir -p "$GROUPS_DIR/$GROUP"
-#                     sudo chmod 750 "$GROUPS_DIR/$GROUP"
-#                   fi
-#                   echo "Adding user $USER to OpenVPN group $GROUP"
-#                   sudo cp "$CLIENTS_DIR/$USER.crt" "$GROUPS_DIR/$GROUP/"
-#                   sudo chmod 640 "$GROUPS_DIR/$GROUP/$USER.crt"
-#                 done
-#               done
-#             fi
-
-#             # -----------------------
-#             # DELETE USER
-#             # -----------------------
-#             if [ "$ACTION" == "delete_user" ]; then
-#               for USER in $(echo "$USERS" | tr ',' ' '); do
-#                 echo "Deleting OpenVPN client $USER"
-#                 sudo rm -f "$CLIENTS_DIR/$USER.crt" "$CLIENTS_DIR/$USER.key" "$CLIENTS_DIR/$USER.ovpn"
-
-#                 # Remove from groups
-#                 for GROUP_DIR in "$GROUPS_DIR"/*; do
-#                   if [ -f "$GROUP_DIR/$USER.crt" ]; then
-#                     echo "Removing $USER from $(basename $GROUP_DIR)"
-#                     sudo rm -f "$GROUP_DIR/$USER.crt"
-#                   fi
-#                 done
-
-#                 # Revoke certificate
-#                 cd $EASYRSA_DIR
-#                 if [ -f "pki/issued/$USER.crt" ]; then
-#                   sudo ./easyrsa revoke "$USER"
-#                   sudo ./easyrsa gen-crl
-#                 fi
-#               done
-#             fi
-
-#             echo "✅ OpenVPN management action completed: $ACTION"
-
+      # 1️⃣1️⃣ Summary
+      - name: Workflow Summary
+        if: always()
+        run: |
+          echo "=== Workflow Execution Summary ===" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Action:** ${{ github.event.inputs.action }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.parse_inputs.outputs.has_groups }}" == "true" ]; then
+            echo "**Groups Created:** ${{ github.event.inputs.groups }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ steps.parse_inputs.outputs.has_users }}" == "true" ]; then
+            echo "**Users Created:** ${{ github.event.inputs.users }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ steps.parse_inputs.outputs.has_users_with_groups }}" == "true" ]; then
+            echo "**Users with Groups:** ${{ github.event.inputs.users_with_groups }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ steps.parse_inputs.outputs.has_mapping }}" == "true" ]; then
+            echo "**User Assignments:** ${{ github.event.inputs.user_group_mapping }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Target IPs:** ${{ steps.get_ips.outputs.ips }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Status:** Workflow completed successfully!" >> $GITHUB_STEP_SUMMARY
