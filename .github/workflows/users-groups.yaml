@@ -36,11 +36,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout repository
       - name: Checkout repo
         uses: actions/checkout@v3
 
-      # 2️⃣ Configure AWS CLI
       - name: Configure AWS CLI
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -48,7 +46,6 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # 3️⃣ Validate inputs based on action
       - name: Validate inputs
         id: validate
         run: |
@@ -90,7 +87,6 @@ jobs:
               ;;
           esac
 
-      # 4️⃣ Parse inputs
       - name: Parse inputs
         id: parse_inputs
         run: |
@@ -132,7 +128,6 @@ jobs:
             echo "has_users_with_groups=false" >> $GITHUB_OUTPUT
           fi
 
-      # 5️⃣ Get EC2 instance public IPs from ASG
       - name: Get EC2 public IPs from ASG
         id: get_ips
         run: |
@@ -161,7 +156,6 @@ jobs:
           echo "ips=$PUBLIC_IPS" >> $GITHUB_OUTPUT
           echo "Public IPs: $PUBLIC_IPS"
 
-      # 6️⃣ Create VPN groups
       - name: Create VPN groups
         if: |
           (steps.validate.outputs.action == 'create-groups' || 
@@ -180,7 +174,6 @@ jobs:
             done
             echo "=== Groups Created Successfully ==="
 
-      # 7️⃣ Create VPN users (without groups)
       - name: Create VPN users
         if: |
           (steps.validate.outputs.action == 'create-users' || 
@@ -199,7 +192,6 @@ jobs:
             done
             echo "=== Users Created Successfully ==="
 
-      # 8️⃣ Create users with groups directly
       - name: Create users with groups
         if: |
           steps.validate.outputs.action == 'create-users-and-groups' &&
@@ -222,7 +214,6 @@ jobs:
             done
             echo "=== Users Created and Assigned Successfully ==="
 
-      # 9️⃣ Assign existing users to groups
       - name: Assign users to groups
         if: |
           (steps.validate.outputs.action == 'assign-users-to-groups' ||
@@ -246,7 +237,6 @@ jobs:
             done
             echo "=== Users Assigned Successfully ==="
 
-      # 🔟 List all groups
       - name: List VPN groups
         if: steps.validate.outputs.action == 'list-groups'
         uses: appleboy/ssh-action@v0.1.8
@@ -260,33 +250,3 @@ jobs:
             echo ""
             echo "=== All VPN Users ==="
             ls -1 /etc/openvpn/clients/*.ovpn 2>/dev/null | xargs -n1 basename | sed 's/.ovpn$//' || echo "No users found"
-
-      # 1️⃣1️⃣ Summary
-      - name: Workflow Summary
-        if: always()
-        run: |
-          echo "=== Workflow Execution Summary ===" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Action:** ${{ github.event.inputs.action }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ "${{ steps.parse_inputs.outputs.has_groups }}" == "true" ]; then
-            echo "**Groups Created:** ${{ github.event.inputs.groups }}" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if [ "${{ steps.parse_inputs.outputs.has_users }}" == "true" ]; then
-            echo "**Users Created:** ${{ github.event.inputs.users }}" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if [ "${{ steps.parse_inputs.outputs.has_users_with_groups }}" == "true" ]; then
-            echo "**Users with Groups:** ${{ github.event.inputs.users_with_groups }}" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if [ "${{ steps.parse_inputs.outputs.has_mapping }}" == "true" ]; then
-            echo "**User Assignments:** ${{ github.event.inputs.user_group_mapping }}" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Target IPs:** ${{ steps.get_ips.outputs.ips }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ **Status:** Workflow completed successfully!" >> $GITHUB_STEP_SUMMARY

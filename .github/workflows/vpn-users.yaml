@@ -13,11 +13,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout repository (optional if scripts not needed)
       - name: Checkout repo
         uses: actions/checkout@v3
 
-      # 2️⃣ Configure AWS CLI
       - name: Configure AWS CLI
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -25,14 +23,12 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # 3️⃣ Prepare user list
       - name: Parse users input
         id: parse_users
         run: |
           IFS=',' read -ra USERS <<< "${{ github.event.inputs.users }}"
           echo "users=${USERS[*]}" >> $GITHUB_OUTPUT
 
-      # 4️⃣ Get EC2 instance public IPs from ASG
       - name: Get EC2 public IPs from ASG
         id: get_ips
         run: |
@@ -55,7 +51,6 @@ jobs:
           echo "ips=$PUBLIC_IPS" >> $GITHUB_OUTPUT
           echo "Public IPs: $PUBLIC_IPS"
 
-      # 5️⃣ SSH into each instance and create VPN users
       - name: Create VPN users via SSH
         uses: appleboy/ssh-action@v0.1.8
         with:
