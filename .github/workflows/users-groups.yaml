@@ -1,4 +1,4 @@
-name: OpenVPN User and Group Management via SSH
+name: OpenVPN User and Group Management
 
 on:
   workflow_dispatch:
