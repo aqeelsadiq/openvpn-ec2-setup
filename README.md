@@ -142,7 +142,7 @@ Client config location:
 ### GitHub Actions Workflow
 
 ```text
-.github/workflows/openvpn.yml
+.github/workflows/users-group.yml
 ```
 
 Supported actions:
