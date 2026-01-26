@@ -107,7 +107,6 @@ jobs:
           echo "ips=$PUBLIC_IPS" >> $GITHUB_OUTPUT
           echo "Public IPs: $PUBLIC_IPS"
 
-      # ACTION: Create User Only
       - name: Create VPN User
         if: steps.validate.outputs.action == 'create-user'
         uses: appleboy/ssh-action@v0.1.8
@@ -118,12 +117,11 @@ jobs:
           script: |
             echo "=== Creating VPN User: ${{ steps.validate.outputs.username }} ==="
             sudo /usr/local/bin/add-vpn-user.sh "${{ steps.validate.outputs.username }}"
-            echo "✅ User created successfully!"
+            echo " User created successfully!"
             echo ""
-            echo "📁 User files location:"
+            echo " User files location:"
             ls -lh /etc/openvpn/clients/${{ steps.validate.outputs.username }}.*
 
-      # ACTION: Create Group Only
       - name: Create VPN Group
         if: steps.validate.outputs.action == 'create-group'
         uses: appleboy/ssh-action@v0.1.8
@@ -134,12 +132,11 @@ jobs:
           script: |
             echo "=== Creating VPN Group: ${{ steps.validate.outputs.groupname }} ==="
             sudo /usr/local/bin/add-vpn-group.sh "${{ steps.validate.outputs.groupname }}"
-            echo "✅ Group created successfully!"
+            echo " Group created successfully!"
             echo ""
-            echo "📁 Group directory:"
+            echo " Group directory:"
             ls -lh /etc/openvpn/groups/${{ steps.validate.outputs.groupname }}/
 
-      # ACTION: Create User in Group (creates both if needed)
       - name: Create User in Group
         if: steps.validate.outputs.action == 'create-user-in-group'
         uses: appleboy/ssh-action@v0.1.8
@@ -155,26 +152,25 @@ jobs:
             
             # Check if group exists, create if not
             if [ ! -d "/etc/openvpn/groups/${{ steps.validate.outputs.groupname }}" ]; then
-              echo "📦 Group doesn't exist. Creating group first..."
+              echo " Group doesn't exist. Creating group first..."
               sudo /usr/local/bin/add-vpn-group.sh "${{ steps.validate.outputs.groupname }}"
             else
               echo "✓ Group already exists"
             fi
             
             echo ""
-            echo "👤 Creating user and assigning to group..."
+            echo " Creating user and assigning to group..."
             sudo /usr/local/bin/add-vpn-user.sh "${{ steps.validate.outputs.username }}" "${{ steps.validate.outputs.groupname }}"
             
             echo ""
-            echo "✅ User created and assigned to group successfully!"
+            echo " User created and assigned to group successfully!"
             echo ""
-            echo "📁 User files:"
+            echo " User files:"
             ls -lh /etc/openvpn/clients/${{ steps.validate.outputs.username }}.*
             echo ""
-            echo "📁 Group members:"
+            echo " Group members:"
             ls -lh /etc/openvpn/groups/${{ steps.validate.outputs.groupname }}/
 
-      # ACTION: Assign Existing User to Existing Group
       - name: Assign User to Group
         if: steps.validate.outputs.action == 'assign-user-to-group'
         uses: appleboy/ssh-action@v0.1.8
@@ -190,14 +186,14 @@ jobs:
             
             # Check if user exists
             if [ ! -f "/etc/openvpn/clients/${{ steps.validate.outputs.username }}.ovpn" ]; then
-              echo "❌ Error: User '${{ steps.validate.outputs.username }}' does not exist"
+              echo " Error: User '${{ steps.validate.outputs.username }}' does not exist"
               echo "Create it first with create-user action"
               exit 1
             fi
             
             # Check if group exists
             if [ ! -d "/etc/openvpn/groups/${{ steps.validate.outputs.groupname }}" ]; then
-              echo "❌ Error: Group '${{ steps.validate.outputs.groupname }}' does not exist"
+              echo " Error: Group '${{ steps.validate.outputs.groupname }}' does not exist"
               echo "Create it first with create-group action"
               exit 1
             fi
@@ -205,9 +201,8 @@ jobs:
             sudo /usr/local/bin/assign-user-to-group.sh "${{ steps.validate.outputs.username }}" "${{ steps.validate.outputs.groupname }}"
             
             echo ""
-            echo "✅ User assigned to group successfully!"
+            echo " User assigned to group successfully!"
 
-      # ACTION: List All Groups and Users
       - name: List All Groups and Users
         if: steps.validate.outputs.action == 'list-all'
         uses: appleboy/ssh-action@v0.1.8
@@ -247,11 +242,10 @@ jobs:
             echo ""
             echo "========================================="
 
-      # Summary
       - name: Workflow Summary
         if: always()
         run: |
-          echo "# 🔐 OpenVPN Management Summary" >> $GITHUB_STEP_SUMMARY
+          echo "# OpenVPN Management Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Action:** \`${{ steps.validate.outputs.action }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -260,7 +254,7 @@ jobs:
             create-user)
               echo "**User Created:** \`${{ steps.validate.outputs.username }}\`" >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
-              echo "📥 Download the \`.ovpn\` file from: \`/etc/openvpn/clients/${{ steps.validate.outputs.username }}.ovpn\`" >> $GITHUB_STEP_SUMMARY
+              echo " Download the \`.ovpn\` file from: \`/etc/openvpn/clients/${{ steps.validate.outputs.username }}.ovpn\`" >> $GITHUB_STEP_SUMMARY
               ;;
             create-group)
               echo "**Group Created:** \`${{ steps.validate.outputs.groupname }}\`" >> $GITHUB_STEP_SUMMARY
@@ -269,7 +263,7 @@ jobs:
               echo "**User:** \`${{ steps.validate.outputs.username }}\`" >> $GITHUB_STEP_SUMMARY
               echo "**Group:** \`${{ steps.validate.outputs.groupname }}\`" >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
-              echo "📥 Download the \`.ovpn\` file from: \`/etc/openvpn/clients/${{ steps.validate.outputs.username }}.ovpn\`" >> $GITHUB_STEP_SUMMARY
+              echo " Download the \`.ovpn\` file from: \`/etc/openvpn/clients/${{ steps.validate.outputs.username }}.ovpn\`" >> $GITHUB_STEP_SUMMARY
               ;;
             assign-user-to-group)
               echo "**User:** \`${{ steps.validate.outputs.username }}\`" >> $GITHUB_STEP_SUMMARY
@@ -283,4 +277,4 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Target IPs:** ${{ steps.get_ips.outputs.ips }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ **Status:** Workflow completed successfully!" >> $GITHUB_STEP_SUMMARY
+          echo " **Status:** Workflow completed successfully!" >> $GITHUB_STEP_SUMMARY
