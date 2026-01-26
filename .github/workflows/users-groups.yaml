@@ -22,7 +22,7 @@ on:
         default: "dev"
 
 env:
-  ASG_NAME: dev-demo-asg
+  ASG_NAME: dev-rhizome-asg
   SSH_USER: ubuntu
 
 jobs:
