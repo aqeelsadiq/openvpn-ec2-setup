@@ -29,3 +29,8 @@ variable "sse_enabled" {
   type        = bool
   default     = true
 }
+
+variable "allowed_user_arns" {
+  description = "List of IAM user ARNs allowed to access S3 objects"
+  type        = list(string)
+}

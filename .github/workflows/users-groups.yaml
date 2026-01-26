@@ -1,19 +1,187 @@
-# name: OpenVPN User & Group Management via SSH
+name: OpenVPN User Management via SSH
+
+on:
+  workflow_dispatch:
+    inputs:
+      ACTION:
+        description: "Action to perform"
+        type: choice
+        required: true
+        options:
+          - create
+          - delete
+
+      USERS:
+        description: "Comma-separated VPN usernames"
+        required: true
+        default: "alice"
+
+      GROUPS:
+        description: "Comma-separated OpenVPN groups (infra,dev,prod)"
+        required: false
+        default: "dev"
+
+env:
+  ASG_NAME: dev-demo-asg
+  SSH_USER: ubuntu
+
+jobs:
+  manage-openvpn-users:
+    runs-on: ubuntu-latest
+
+    steps:
+    # -------------------------------
+    # Checkout (standard practice)
+    # -------------------------------
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # -------------------------------
+    # Configure AWS CLI
+    # -------------------------------
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v5
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    # -------------------------------
+    # Discover OpenVPN EC2 instances
+    # -------------------------------
+    - name: Get OpenVPN EC2 Public IPs
+      id: get_ips
+      run: |
+        set -e
+
+        INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
+          --auto-scaling-group-names "${ASG_NAME}" \
+          --query "AutoScalingGroups[0].Instances[].InstanceId" \
+          --output text)
+
+        if [[ -z "$INSTANCE_IDS" ]]; then
+          echo "No EC2 instances found in ASG"
+          exit 1
+        fi
+
+        IPS=""
+        for ID in $INSTANCE_IDS; do
+          IP=$(aws ec2 describe-instances \
+            --instance-ids "$ID" \
+            --query "Reservations[0].Instances[0].PublicIpAddress" \
+            --output text)
+
+          [[ "$IP" != "None" ]] && IPS="$IPS $IP"
+        done
+
+        if [[ -z "$IPS" ]]; then
+          echo "No public IPs found"
+          exit 1
+        fi
+
+        echo "ips=$IPS" >> $GITHUB_OUTPUT
+        echo "OpenVPN servers: $IPS"
+
+    # -------------------------------
+    # CREATE OpenVPN users
+    # -------------------------------
+    - name: Create OpenVPN users
+      if: inputs.ACTION == 'create'
+      uses: appleboy/ssh-action@v0.1.8
+      with:
+        host: ${{ steps.get_ips.outputs.ips }}
+        username: ${{ env.SSH_USER }}
+        key: ${{ secrets.OPENVPN_SSH_KEY }}
+        script: |
+          set -e
+
+          IFS=',' read -ra USERS <<< "${{ inputs.USERS }}"
+          IFS=',' read -ra GROUPS <<< "${{ inputs.GROUPS }}"
+
+          sudo mkdir -p /etc/openvpn/ccd
+
+          for USER in "${USERS[@]}"; do
+            echo "Creating OpenVPN user: $USER"
+
+            sudo /usr/local/bin/add-vpn-user.sh "$USER"
+
+            CCD_FILE="/etc/openvpn/ccd/$USER"
+            sudo rm -f "$CCD_FILE"
+
+            for GROUP in "${GROUPS[@]}"; do
+              echo "Assigning $USER to group: $GROUP"
+
+              case "$GROUP" in
+                infra)
+                  echo 'push "route 10.0.0.0 255.255.0.0"' | sudo tee -a "$CCD_FILE"
+                  ;;
+                dev)
+                  echo 'push "route 10.1.0.0 255.255.0.0"' | sudo tee -a "$CCD_FILE"
+                  ;;
+                prod)
+                  echo 'push "route 10.2.0.0 255.255.0.0"' | sudo tee -a "$CCD_FILE"
+                  ;;
+                *)
+                  echo "Unknown group: $GROUP (skipped)"
+                  ;;
+              esac
+            done
+          done
+
+          sudo systemctl restart openvpn@server
+
+    # -------------------------------
+    # DELETE / REVOKE OpenVPN users
+    # -------------------------------
+    - name: Delete OpenVPN users
+      if: inputs.ACTION == 'delete'
+      uses: appleboy/ssh-action@v0.1.8
+      with:
+        host: ${{ steps.get_ips.outputs.ips }}
+        username: ${{ env.SSH_USER }}
+        key: ${{ secrets.OPENVPN_SSH_KEY }}
+        script: |
+          set -e
+
+          IFS=',' read -ra USERS <<< "${{ inputs.USERS }}"
+          cd /etc/openvpn/easy-rsa
+
+          for USER in "${USERS[@]}"; do
+            echo "Revoking OpenVPN user: $USER"
+
+            sudo ./easyrsa revoke "$USER"
+            sudo ./easyrsa gen-crl
+
+            sudo rm -f /etc/openvpn/clients/$USER.*
+            sudo rm -f /etc/openvpn/ccd/$USER
+          done
+
+          sudo systemctl restart openvpn@server
+
 
 # on:
 #   workflow_dispatch:
 #     inputs:
+#       action:
+#         description: "Action to perform"
+#         required: true
+#         default: "create_user"
+#         options:
+#           - create_user
+#           - delete_user
+#           - create_group
+#           - delete_group
 #       users:
-#         description: 'Comma-separated VPN usernames'
-#         required: true
-#         default: 'alice'
+#         description: "Comma-separated VPN usernames (required for create_user/delete_user)"
+#         required: false
+#         default: ""
 #       groups:
-#         description: 'Comma-separated Linux groups'
-#         required: true
-#         default: 'vpn-users'
+#         description: "Comma-separated OpenVPN groups (required for create_group/delete_group or add user to group)"
+#         required: false
+#         default: ""
 
 # jobs:
-#   manage-vpn-access:
+#   manage-vpn:
 #     runs-on: ubuntu-latest
 
 #     steps:
@@ -27,24 +195,10 @@
 #           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 #           aws-region: ${{ secrets.AWS_REGION }}
 
-#       - name: Parse users
-#         id: parse_users
-#         run: |
-#           echo "users=${{ github.event.inputs.users }}" >> "$GITHUB_OUTPUT"
-        
-        
-
-#       - name: Parse groups
-#         id: parse_groups
-#         run: |
-#           echo "groups=${{ github.event.inputs.groups }}" >> "$GITHUB_OUTPUT"
-        
-
 #       - name: Get EC2 public IPs
 #         id: get_ips
 #         run: |
 #           ASG_NAME="dev-demo-asg"
-
 #           INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
 #             --auto-scaling-group-names $ASG_NAME \
 #             --query "AutoScalingGroups[0].Instances[].InstanceId" \
@@ -59,238 +213,142 @@
 #             PUBLIC_IPS="$PUBLIC_IPS $IP"
 #           done
 
-#           echo "ips=$PUBLIC_IPS" >> $GITHUB_OUTPUT
+#           echo "ips=$(echo $PUBLIC_IPS | tr ' ' '\n')" >> $GITHUB_OUTPUT
+#           echo "Found EC2 IPs: $PUBLIC_IPS"
 
-#       - name: Manage users & groups
+#       - name: OpenVPN User & Group Management via SSH
 #         uses: appleboy/ssh-action@v0.1.8
 #         with:
 #           host: ${{ steps.get_ips.outputs.ips }}
 #           username: ubuntu
 #           key: ${{ secrets.OPENVPN_SSH_KEY }}
 #           script: |
-#             USERS="${{ steps.parse_users.outputs.users }}"
-#             GROUPS="${{ steps.parse_groups.outputs.groups }}"
+#             set -e
 
-#             # Create groups if not exist
-#             for GROUP in $GROUPS; do
-#               if getent group "$GROUP" >/dev/null; then
-#                 echo "Group $GROUP already exists"
-#               else
-#                 echo "Creating group $GROUP"
-#                 sudo groupadd "$GROUP"
-#               fi
-#             done
+#             ACTION="${{ github.event.inputs.action }}"
+#             USERS="${{ github.event.inputs.users }}"
+#             GROUPS="${{ github.event.inputs.groups }}"
 
-#             # Create users and add to groups
-#             for USER in $USERS; do
-#               if id "$USER" >/dev/null 2>&1; then
-#                 echo "User $USER already exists"
-#               else
-#                 echo "Creating user $USER"
-#                 sudo useradd -m "$USER"
-#               fi
+#             EASYRSA_DIR="/etc/openvpn/easy-rsa"
+#             CLIENTS_DIR="/etc/openvpn/clients"
+#             GROUPS_DIR="/etc/openvpn/groups"
 
-#               for GROUP in $GROUPS; do
-#                 echo "Adding $USER to group $GROUP"
-#                 sudo usermod -aG "$GROUP" "$USER"
+#             echo "Starting OpenVPN management action: $ACTION"
+
+#             # -----------------------
+#             # CREATE GROUP
+#             # -----------------------
+#             if [ "$ACTION" == "create_group" ]; then
+#               for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
+#                 if [ ! -d "$GROUPS_DIR/$GROUP" ]; then
+#                   echo "Creating OpenVPN group: $GROUP"
+#                   sudo mkdir -p "$GROUPS_DIR/$GROUP"
+#                   sudo chmod 750 "$GROUPS_DIR/$GROUP"
+#                 else
+#                   echo "Group $GROUP already exists"
+#                 fi
 #               done
+#             fi
 
-#               # Create OpenVPN user
-#               echo "Creating OpenVPN user for $USER"
-#               sudo /usr/local/bin/add-vpn-user.sh "$USER"
-#             done
-name: OpenVPN User & Group Management
+#             # -----------------------
+#             # DELETE GROUP
+#             # -----------------------
+#             if [ "$ACTION" == "delete_group" ]; then
+#               for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
+#                 if [ -d "$GROUPS_DIR/$GROUP" ]; then
+#                   echo "Deleting OpenVPN group: $GROUP"
+#                   sudo rm -rf "$GROUPS_DIR/$GROUP"
+#                 else
+#                   echo "Group $GROUP does not exist"
+#                 fi
+#               done
+#             fi
 
-on:
-  workflow_dispatch:
-    inputs:
-      action:
-        description: "Action to perform"
-        required: true
-        default: "create_user"
-        options:
-          - create_user
-          - delete_user
-          - create_group
-          - delete_group
-      users:
-        description: "Comma-separated VPN usernames (required for create_user/delete_user)"
-        required: false
-        default: ""
-      groups:
-        description: "Comma-separated OpenVPN groups (required for create_group/delete_group or add user to group)"
-        required: false
-        default: ""
+#             # -----------------------
+#             # CREATE USER (with .crt, .key, .ovpn)
+#             # -----------------------
+#             if [ "$ACTION" == "create_user" ]; then
+#               for USER in $(echo "$USERS" | tr ',' ' '); do
+#                 cd $EASYRSA_DIR
 
-jobs:
-  manage-vpn:
-    runs-on: ubuntu-latest
+#                 # 1️⃣ Generate client certificate if missing
+#                 if [ ! -f "$CLIENTS_DIR/$USER.crt" ]; then
+#                   echo "Generating OpenVPN client for $USER"
+#                   sudo ./easyrsa build-client-full "$USER" nopass
 
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+#                   # Copy cert, key, and generate .ovpn
+#                   sudo mkdir -p "$CLIENTS_DIR"
+#                   sudo cp "pki/issued/$USER.crt" "$CLIENTS_DIR/"
+#                   sudo cp "pki/private/$USER.key" "$CLIENTS_DIR/"
+#                   sudo cp "pki/ca.crt" "$CLIENTS_DIR/"
 
-      - name: Configure AWS CLI
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+#                   # Generate .ovpn file
+#                   sudo bash -c "cat > $CLIENTS_DIR/$USER.ovpn <<EOF
+#                   client
+#                   dev tun
+#                   proto udp
+#                   remote YOUR_VPN_SERVER_IP 1194
+#                   resolv-retry infinite
+#                   nobind
+#                   persist-key
+#                   persist-tun
+#                   remote-cert-tls server
+#                   cipher AES-256-CBC
+#                   auth SHA256
+#                   key-direction 1
+#                   <ca>
+#                   $(cat $CLIENTS_DIR/ca.crt)
+#                   </ca>
+#                   <cert>
+#                   $(cat $CLIENTS_DIR/$USER.crt)
+#                   </cert>
+#                   <key>
+#                   $(cat $CLIENTS_DIR/$USER.key)
+#                   </key>
+#                   EOF"
+#                   echo "✅ OpenVPN client $USER created at $CLIENTS_DIR/$USER.ovpn"
+#                 else
+#                   echo "OpenVPN client $USER already exists"
+#                 fi
 
-      - name: Get EC2 public IPs
-        id: get_ips
-        run: |
-          ASG_NAME="dev-demo-asg"
-          INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
-            --auto-scaling-group-names $ASG_NAME \
-            --query "AutoScalingGroups[0].Instances[].InstanceId" \
-            --output text)
+#                 # 2️⃣ Add user to groups
+#                 for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
+#                   if [ ! -d "$GROUPS_DIR/$GROUP" ]; then
+#                     echo "Group $GROUP does not exist. Creating..."
+#                     sudo mkdir -p "$GROUPS_DIR/$GROUP"
+#                     sudo chmod 750 "$GROUPS_DIR/$GROUP"
+#                   fi
+#                   echo "Adding user $USER to OpenVPN group $GROUP"
+#                   sudo cp "$CLIENTS_DIR/$USER.crt" "$GROUPS_DIR/$GROUP/"
+#                   sudo chmod 640 "$GROUPS_DIR/$GROUP/$USER.crt"
+#                 done
+#               done
+#             fi
 
-          PUBLIC_IPS=""
-          for ID in $INSTANCE_IDS; do
-            IP=$(aws ec2 describe-instances \
-              --instance-ids $ID \
-              --query "Reservations[0].Instances[0].PublicIpAddress" \
-              --output text)
-            PUBLIC_IPS="$PUBLIC_IPS $IP"
-          done
+#             # -----------------------
+#             # DELETE USER
+#             # -----------------------
+#             if [ "$ACTION" == "delete_user" ]; then
+#               for USER in $(echo "$USERS" | tr ',' ' '); do
+#                 echo "Deleting OpenVPN client $USER"
+#                 sudo rm -f "$CLIENTS_DIR/$USER.crt" "$CLIENTS_DIR/$USER.key" "$CLIENTS_DIR/$USER.ovpn"
 
-          echo "ips=$(echo $PUBLIC_IPS | tr ' ' '\n')" >> $GITHUB_OUTPUT
-          echo "Found EC2 IPs: $PUBLIC_IPS"
+#                 # Remove from groups
+#                 for GROUP_DIR in "$GROUPS_DIR"/*; do
+#                   if [ -f "$GROUP_DIR/$USER.crt" ]; then
+#                     echo "Removing $USER from $(basename $GROUP_DIR)"
+#                     sudo rm -f "$GROUP_DIR/$USER.crt"
+#                   fi
+#                 done
 
-      - name: OpenVPN User & Group Management via SSH
-        uses: appleboy/ssh-action@v0.1.8
-        with:
-          host: ${{ steps.get_ips.outputs.ips }}
-          username: ubuntu
-          key: ${{ secrets.OPENVPN_SSH_KEY }}
-          script: |
-            set -e
+#                 # Revoke certificate
+#                 cd $EASYRSA_DIR
+#                 if [ -f "pki/issued/$USER.crt" ]; then
+#                   sudo ./easyrsa revoke "$USER"
+#                   sudo ./easyrsa gen-crl
+#                 fi
+#               done
+#             fi
 
-            ACTION="${{ github.event.inputs.action }}"
-            USERS="${{ github.event.inputs.users }}"
-            GROUPS="${{ github.event.inputs.groups }}"
-
-            EASYRSA_DIR="/etc/openvpn/easy-rsa"
-            CLIENTS_DIR="/etc/openvpn/clients"
-            GROUPS_DIR="/etc/openvpn/groups"
-
-            echo "Starting OpenVPN management action: $ACTION"
-
-            # -----------------------
-            # CREATE GROUP
-            # -----------------------
-            if [ "$ACTION" == "create_group" ]; then
-              for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
-                if [ ! -d "$GROUPS_DIR/$GROUP" ]; then
-                  echo "Creating OpenVPN group: $GROUP"
-                  sudo mkdir -p "$GROUPS_DIR/$GROUP"
-                  sudo chmod 750 "$GROUPS_DIR/$GROUP"
-                else
-                  echo "Group $GROUP already exists"
-                fi
-              done
-            fi
-
-            # -----------------------
-            # DELETE GROUP
-            # -----------------------
-            if [ "$ACTION" == "delete_group" ]; then
-              for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
-                if [ -d "$GROUPS_DIR/$GROUP" ]; then
-                  echo "Deleting OpenVPN group: $GROUP"
-                  sudo rm -rf "$GROUPS_DIR/$GROUP"
-                else
-                  echo "Group $GROUP does not exist"
-                fi
-              done
-            fi
-
-            # -----------------------
-            # CREATE USER (with .crt, .key, .ovpn)
-            # -----------------------
-            if [ "$ACTION" == "create_user" ]; then
-              for USER in $(echo "$USERS" | tr ',' ' '); do
-                cd $EASYRSA_DIR
-
-                # 1️⃣ Generate client certificate if missing
-                if [ ! -f "$CLIENTS_DIR/$USER.crt" ]; then
-                  echo "Generating OpenVPN client for $USER"
-                  sudo ./easyrsa build-client-full "$USER" nopass
-
-                  # Copy cert, key, and generate .ovpn
-                  sudo mkdir -p "$CLIENTS_DIR"
-                  sudo cp "pki/issued/$USER.crt" "$CLIENTS_DIR/"
-                  sudo cp "pki/private/$USER.key" "$CLIENTS_DIR/"
-                  sudo cp "pki/ca.crt" "$CLIENTS_DIR/"
-
-                  # Generate .ovpn file
-                  sudo bash -c "cat > $CLIENTS_DIR/$USER.ovpn <<EOF
-                  client
-                  dev tun
-                  proto udp
-                  remote YOUR_VPN_SERVER_IP 1194
-                  resolv-retry infinite
-                  nobind
-                  persist-key
-                  persist-tun
-                  remote-cert-tls server
-                  cipher AES-256-CBC
-                  auth SHA256
-                  key-direction 1
-                  <ca>
-                  $(cat $CLIENTS_DIR/ca.crt)
-                  </ca>
-                  <cert>
-                  $(cat $CLIENTS_DIR/$USER.crt)
-                  </cert>
-                  <key>
-                  $(cat $CLIENTS_DIR/$USER.key)
-                  </key>
-                  EOF"
-                  echo "✅ OpenVPN client $USER created at $CLIENTS_DIR/$USER.ovpn"
-                else
-                  echo "OpenVPN client $USER already exists"
-                fi
-
-                # 2️⃣ Add user to groups
-                for GROUP in $(echo "$GROUPS" | tr ',' ' '); do
-                  if [ ! -d "$GROUPS_DIR/$GROUP" ]; then
-                    echo "Group $GROUP does not exist. Creating..."
-                    sudo mkdir -p "$GROUPS_DIR/$GROUP"
-                    sudo chmod 750 "$GROUPS_DIR/$GROUP"
-                  fi
-                  echo "Adding user $USER to OpenVPN group $GROUP"
-                  sudo cp "$CLIENTS_DIR/$USER.crt" "$GROUPS_DIR/$GROUP/"
-                  sudo chmod 640 "$GROUPS_DIR/$GROUP/$USER.crt"
-                done
-              done
-            fi
-
-            # -----------------------
-            # DELETE USER
-            # -----------------------
-            if [ "$ACTION" == "delete_user" ]; then
-              for USER in $(echo "$USERS" | tr ',' ' '); do
-                echo "Deleting OpenVPN client $USER"
-                sudo rm -f "$CLIENTS_DIR/$USER.crt" "$CLIENTS_DIR/$USER.key" "$CLIENTS_DIR/$USER.ovpn"
-
-                # Remove from groups
-                for GROUP_DIR in "$GROUPS_DIR"/*; do
-                  if [ -f "$GROUP_DIR/$USER.crt" ]; then
-                    echo "Removing $USER from $(basename $GROUP_DIR)"
-                    sudo rm -f "$GROUP_DIR/$USER.crt"
-                  fi
-                done
-
-                # Revoke certificate
-                cd $EASYRSA_DIR
-                if [ -f "pki/issued/$USER.crt" ]; then
-                  sudo ./easyrsa revoke "$USER"
-                  sudo ./easyrsa gen-crl
-                fi
-              done
-            fi
-
-            echo "✅ OpenVPN management action completed: $ACTION"
+#             echo "✅ OpenVPN management action completed: $ACTION"
 

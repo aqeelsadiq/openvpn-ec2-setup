@@ -2,6 +2,8 @@ aws_region = "us-east-1"
 key_name = "openvpn"
 env        = "dev"
 identifier = "rhizome"
+allowed_user_arns = ["arn:aws:iam::947309777885:user/aqeel"]
+
 
 vpc_configs = {
   vpc_name                = "dev-rhizome-vpc"

@@ -89,4 +89,5 @@ module "openvpn_s3" {
   acl                = "private"
   versioning_enabled = true
   sse_enabled        = true
+  allowed_user_arns = var.allowed_user_arns
 }

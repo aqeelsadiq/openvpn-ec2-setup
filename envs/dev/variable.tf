@@ -3,6 +3,7 @@ variable "identifier" {}
 variable "env" {}
 variable "aws_region" {}
 variable "key_name" {}
+variable "allowed_user_arns" {}
 
 
 variable "vpc_configs" {
